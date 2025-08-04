@@ -227,5 +227,7 @@ def get_arg_parser():
         "--model_name_out", default=None, type=str,
         help="Name of model to save as, defaults to name describing model architecture. "
         "Model is saved in the folder specified by --dir in models subfolder.")
+    training_args.add_argument("--ignore_label", default=None, type=int, help="label value from which to create an ignore mask during training")
+
 
     return parser

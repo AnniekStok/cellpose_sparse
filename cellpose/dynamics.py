@@ -171,12 +171,19 @@ def masks_to_flows_gpu(masks, device=torch.device("cpu"), niter=None):
     
     ### get center-of-mass within cell
     slices = find_objects(masks)
-    # turn slices into array
+    # turn slices into array, filtering out slices that are 1 pixel in size to avoid axis out of bounds error
     slices = np.array([
         np.array([i, si[0].start, si[0].stop, si[1].start, si[1].stop])
         for i, si in enumerate(slices)
-        if si is not None
+        if si is not None and (si[0].stop - si[0].start > 1 and si[1].stop - si[1].start > 1)
     ])
+    
+    # return empty flows if no object larger than 1 pixel are present.
+    if len(slices) == 0:
+        mu0 = np.zeros((2, Ly0, Lx0), dtype=np.float64)
+        meds_p = np.zeros((0, 2), dtype=np.int64)
+        return mu0, meds_p
+
     centers, ext = get_centers(masks, slices)
     meds_p = torch.from_numpy(centers).to(device).long()
     meds_p += 1  # for padding
@@ -192,7 +199,11 @@ def masks_to_flows_gpu(masks, device=torch.device("cpu"), niter=None):
 
     # put into original image
     mu0 = np.zeros((2, Ly0, Lx0))
-    mu0[:, y.cpu().numpy() - 1, x.cpu().numpy() - 1] = mu
+
+    # clip before indexing to avoid error 'index ... is out of bounds for axis 1'
+    yy = np.clip(y.cpu().numpy() - 1, 0, Ly0 - 1)
+    xx = np.clip(x.cpu().numpy() - 1, 0, Lx0 - 1)
+    mu0[:, yy, xx] = mu
 
     return mu0, meds_p.cpu().numpy() - 1
 
@@ -360,8 +371,8 @@ def masks_to_flows(masks, device=torch.device("cpu"), niter=None):
         raise ValueError("masks_to_flows only takes 2D or 3D arrays")
 
 
-def labels_to_flows(labels, files=None, device=None, redo_flows=False, niter=None,
-                    return_flows=True):
+def labels_to_flows(labels, files=None, device="None", redo_flows=False, niter=None,
+                    return_flows=True, ignore_label: int | None = None):
     """Converts labels (list of masks or flows) to flows for training model.
 
     Args:
@@ -373,6 +384,7 @@ def labels_to_flows(labels, files=None, device=None, redo_flows=False, niter=Non
         device (str, optional): The device to use for computation. Defaults to None.
         redo_flows (bool, optional): Whether to recompute the flows. Defaults to False.
         niter (int, optional): The number of iterations for computing flows. Defaults to None.
+        ignore_label (int, optional): If provided, this label is ignored in the flow computation.
 
     Returns:
         list of [4 x Ly x Lx] arrays: The flows for training the model. flows[k][0] is labels[k], 
@@ -388,22 +400,42 @@ def labels_to_flows(labels, files=None, device=None, redo_flows=False, niter=Non
     if labels[0].shape[0] == 1 or labels[0].ndim < 3 or redo_flows:
         dynamics_logger.info("computing flows for labels")
 
+        # If an ignore_label was provided, create ignore mask before remapping labels
+        ignore_masks = [label_img == ignore_label if ignore_label is not None else None for label_img in labels]
+
         # compute flows; labels are fixed here to be unique, so they need to be passed back
         # make sure labels are unique!
         labels = [fastremap.renumber(label, in_place=True)[0] for label in labels]
         iterator = trange if nimg > 1 else range
         for n in iterator(nimg):
             labels[n][0] = fastremap.renumber(labels[n][0], in_place=True)[0]
-            vecn = masks_to_flows(labels[n][0].astype(int), device=device, niter=niter)
+            
+            ignore_mask = ignore_masks[n]
+            if ignore_mask is not None: 
+                labels[n][0][np.squeeze(ignore_mask)] = 0
 
-            # concatenate labels, distance transform, vector flows, heat (boundary and mask are computed in augmentations)
-            flow = np.concatenate((labels[n], labels[n] > 0.5, vecn),
-                                  axis=0).astype(np.float32)
-            if files is not None:
-                file_name = os.path.splitext(files[n])[0]
-                tifffile.imwrite(file_name + "_flows.tif", flow)
-            if return_flows:
-                flows.append(flow)
+            vecn = masks_to_flows(
+                labels[n][0].astype(int), device=device, niter=niter)
+            
+            if not np.any(vecn[0]):
+                # append empty array that will be filtered out automatically later
+                C, H, W = labels[n].shape
+                empty_array = np.zeros((4, H, W), dtype=np.float32)
+                flows.append(empty_array)
+            else:
+                # Set celltarget to -1 for to be ignored regions
+                celltarget = (labels[n] > 0.5).astype(np.float32)
+                if ignore_mask is not None:
+                    celltarget[ignore_mask] = -1
+
+                # concatenate labels, distance transform, vector flows, heat (boundary and mask are computed in augmentations)
+                flow = np.concatenate((labels[n], celltarget, vecn), axis=0).astype(np.float32)
+
+                if files is not None:
+                    file_name = os.path.splitext(files[n])[0]
+                    tifffile.imwrite(file_name + "_flows.tif", flow)
+                if return_flows:
+                    flows.append(flow)
     else:
         dynamics_logger.info("flows precomputed")
         if return_flows:
