@@ -1,3 +1,7 @@
+## About this fork
+This fork adds an `ignore_label` parameter, allowing pixels in the training images that have this label to be ignored during training.
+The approach was originally implemented in https://github.com/ksugar/cellpose-sparse, and adapted here for compatibility with release v4.0.6 of Cellpose.
+
 # <p>  <b>Cellpose </b> </p>
 <img src="http://www.cellpose.org/static/images/logo.png?raw=True" width="250" title="cellpose" alt="cellpose" align="right" vspace = "50">
 
