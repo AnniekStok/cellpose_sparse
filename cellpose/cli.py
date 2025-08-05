@@ -237,4 +237,6 @@ def get_arg_parser():
     training_args.add_argument("--train_size", action="store_true", help=
         'Deprecated in v4.0.1+, not used. ')
 
+    training_args.add_argument("--ignore_label", default=None, type=int, help="label to ignore during training")
+
     return parser

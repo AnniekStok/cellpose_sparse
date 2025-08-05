@@ -25,12 +25,38 @@ def _loss_fn_class(lbl, y, class_weights=None):
 
     """
 
-    criterion3 = nn.CrossEntropyLoss(reduction="mean", weight=class_weights)
+    criterion3 = nn.CrossEntropyLoss(reduction="mean", weight=class_weights, ignore_index=-1)
     loss3 = criterion3(y[:, :-3], lbl[:, 0].long())
     
     return loss3
 
 def _loss_fn_seg(lbl, y, device):
+    """
+    Calculates the loss function between true labels lbl and prediction y,
+    with masking for to be ignored pixels, which have value -1 in the cellprob.
+
+    Args:
+        lbl (torch.Tensor): True labels (cellprob, flowsY, flowsX).
+        y (torch.Tensor): Predicted values (flowsY, flowsX, cellprob).
+        device (torch.device): Device on which the tensors are located.
+
+    Returns:
+        torch.Tensor: Loss value.
+    """
+    criterion = nn.MSELoss(reduction="mean")
+    criterion2 = nn.BCEWithLogitsLoss(reduction="mean")
+
+    valid_mask = lbl[:, 0] != -1
+
+    veci = 5. * lbl[:, -2:]
+
+    loss = criterion(y[:, -3:-1][valid_mask.unsqueeze(1).expand_as(y[:, -3:-1])], veci[valid_mask.unsqueeze(1).expand_as(veci)])
+    loss /= 2.
+    loss2 = criterion2(y[:, -1][valid_mask], (lbl[:, -3] > 0.5).to(y.dtype)[valid_mask])
+    loss = loss + loss2
+    return loss
+
+def _loss_fn_seg_orig(lbl, y, device):
     """
     Calculates the loss function between true labels lbl and prediction y.
 
@@ -141,7 +167,7 @@ def _process_train_test(train_data=None, train_labels=None, train_files=None,
                         test_labels=None, test_files=None, test_labels_files=None,
                         test_probs=None, load_files=True, min_train_masks=5,
                         compute_flows=False, normalize_params={"normalize": False}, 
-                        channel_axis=None, device=None):
+                        channel_axis=None, device=None, ignore_label=None):
     """
     Process train and test data.
 
@@ -164,6 +190,7 @@ def _process_train_test(train_data=None, train_labels=None, train_files=None,
         rgb (bool): Convert training/testing images to RGB.
         normalize_params (dict): Dictionary of normalization parameters.
         device (torch.device): Device to use for computation.
+        ignore_label (int): label to ignore during training.
 
     Returns:
         tuple: A tuple containing the processed train and test data and sampling probabilities and diameters.
@@ -224,18 +251,18 @@ def _process_train_test(train_data=None, train_labels=None, train_files=None,
     ### check that flows are computed
     if train_labels is not None:
         train_labels = dynamics.labels_to_flows(train_labels, files=train_files,
-                                                device=device)
+                                                device=device,ignore_label=ignore_label)
         if test_labels is not None:
             test_labels = dynamics.labels_to_flows(test_labels, files=test_files,
-                                                   device=device)
+                                                   device=device,ignore_label=ignore_label)
     elif compute_flows:
         for k in trange(nimg):
             tl = dynamics.labels_to_flows(io.imread(train_labels_files),
-                                          files=train_files, device=device)
+                                          files=train_files, device=device,ignore_label=ignore_label)
         if test_files is not None:
             for k in trange(nimg_test):
                 tl = dynamics.labels_to_flows(io.imread(test_labels_files),
-                                              files=test_files, device=device)
+                                              files=test_files, device=device,ignore_label=ignore_label)
 
     ### compute diameters
     nmasks = np.zeros(nimg)
@@ -314,7 +341,7 @@ def train_seg(net, train_data=None, train_labels=None, train_files=None,
               n_epochs=100, weight_decay=0.1, normalize=True, compute_flows=False,
               save_path=None, save_every=100, save_each=False, nimg_per_epoch=None,
               nimg_test_per_epoch=None, rescale=False, scale_range=None, bsize=256,
-              min_train_masks=5, model_name=None, class_weights=None):
+              min_train_masks=5, model_name=None, class_weights=None, ignore_label=None):
     """
     Train the network with images for segmentation.
 
@@ -347,6 +374,7 @@ def train_seg(net, train_data=None, train_labels=None, train_files=None,
         rescale (bool, optional): Boolean - whether or not to rescale images during training. Defaults to True.
         min_train_masks (int, optional): Integer - minimum number of masks an image must have to use in the training set. Defaults to 5.
         model_name (str, optional): String - name of the network. Defaults to None.
+        ignore_label (int): label to ignore during training
 
     Returns:
         tuple: A tuple containing the path to the saved model weights, training losses, and test losses.
@@ -383,7 +411,8 @@ def train_seg(net, train_data=None, train_labels=None, train_files=None,
                               test_probs=test_probs,
                               load_files=load_files, min_train_masks=min_train_masks,
                               compute_flows=compute_flows, channel_axis=channel_axis,
-                              normalize_params=normalize_params, device=net.device)
+                              normalize_params=normalize_params, device=net.device, 
+                              ignore_label=ignore_label)
     (train_data, train_labels, train_files, train_labels_files, train_probs, diam_train,
      test_data, test_labels, test_files, test_labels_files, test_probs, diam_test,
      normed) = out
@@ -541,7 +570,7 @@ def train_seg(net, train_data=None, train_labels=None, train_files=None,
     
     net.save_model(filename)
 
-    if original_net_dtype is not None:
+    if original_net_dtype is not None and not (device.type == 'mps' and original_net_dtype == torch.bfloat16):
         net.dtype = original_net_dtype
         net.to(original_net_dtype)
 
