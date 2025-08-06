@@ -1,6 +1,11 @@
 ## About this fork
-This fork adds an `ignore_label` parameter, allowing pixels in the training images that have this label to be ignored during training.
+This fork adds an `ignore_label` parameter, allowing pixels in the training images that have this label value to be ignored during training.
 The approach was originally implemented in https://github.com/ksugar/cellpose-sparse, and adapted here for compatibility with release v4.0.6 of Cellpose.
+
+### Example use case
+In the case of model finetuning on heterogeneous 3D tissues, it might save annotation time to only label the cells of the tissue of interest (green), and put an 'ignore label' on all other, similar looking cells (red). This way, the model will not assume that the non-labeled cells are part of the background, which may result in poor segmentation of the cells of interest. Tissues that are very dissimilar from the cells of interest (purple) can still be labeled as background in order to exclude them from the segmentation. 
+<img width="800" alt="image" src="https://github.com/user-attachments/assets/d2b86ce1-9eda-4131-9b18-eb373250f1de" />
+
 
 # <p>  <b>Cellpose </b> </p>
 <img src="http://www.cellpose.org/static/images/logo.png?raw=True" width="250" title="cellpose" alt="cellpose" align="right" vspace = "50">
